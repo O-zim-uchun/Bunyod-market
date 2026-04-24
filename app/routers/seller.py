@@ -1,6 +1,6 @@
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import get_session
@@ -26,7 +26,7 @@ async def seller_warehouse(message: Message) -> None:
 
             products = await ProductService.list_products(session, user)
             count = len(products)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, RuntimeError):
         await message.answer("Omborni olishda xatolik.")
         return
 
@@ -34,59 +34,67 @@ async def seller_warehouse(message: Message) -> None:
         await message.answer("Ombordagi mahsulotlar soni: 0")
         return
 
-    lines = [f"Ombordagi mahsulotlar soni: {count}"]
+    await message.answer(f"Ombordagi mahsulotlar soni: {count}")
+
     for item in products:
-        lines.append(f"• ID {item.id} | preview: /product_{item.id} | delete: /delete_product_{item.id}")
-    await message.answer("\n".join(lines))
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="👁 Preview", callback_data=f"seller_preview:{item.id}")],
+                [InlineKeyboardButton(text="❌ O'chirish", callback_data=f"seller_delete:{item.id}")],
+            ]
+        )
+        await message.answer(f"Mahsulot ID: {item.id}", reply_markup=kb)
 
 
-@router.message(lambda m: (m.text or "").startswith("/product_"))
-async def seller_product_preview(message: Message, bot: Bot) -> None:
-    product_id_text = (message.text or "").replace("/product_", "", 1)
+@router.callback_query(F.data.startswith("seller_preview:"))
+async def seller_product_preview(callback: CallbackQuery, bot: Bot) -> None:
+    product_id_text = callback.data.split(":", maxsplit=1)[1]
     if not product_id_text.isdigit():
-        await message.answer("Noto'g'ri product id.")
+        await callback.answer("Noto'g'ri product id.", show_alert=True)
         return
 
     try:
         async with get_session() as session:
-            user = await UserService.get_or_create(session, message.from_user.id)
+            user = await UserService.get_or_create(session, callback.from_user.id)
             product = await ProductService.get_product_for_update(session, user, int(product_id_text))
     except ProductAccessError:
-        await message.answer("Siz bu mahsulotni ko'ra olmaysiz.")
+        await callback.answer("Siz bu mahsulotni ko'ra olmaysiz.", show_alert=True)
         return
     except LookupError:
-        await message.answer("Mahsulot topilmadi.")
+        await callback.answer("Mahsulot topilmadi.", show_alert=True)
         return
-    except SQLAlchemyError:
-        await message.answer("Mahsulotni olishda xatolik.")
+    except (SQLAlchemyError, RuntimeError):
+        await callback.answer("Mahsulotni olishda xatolik.", show_alert=True)
         return
 
     if product.channel_id and product.message_id:
         try:
             await bot.copy_message(
-                chat_id=message.chat.id,
+                chat_id=callback.message.chat.id,
                 from_chat_id=product.channel_id,
                 message_id=int(product.message_id),
             )
+            await callback.answer()
             return
         except Exception:
             pass
 
-    await message.answer(f"Mahsulot preview: ID {product.id}")
+    await callback.message.answer(f"Mahsulot preview: ID {product.id}")
+    await callback.answer()
 
 
-@router.message(lambda m: (m.text or "").startswith("/delete_product_"))
-async def seller_delete_product(message: Message, bot: Bot) -> None:
-    product_id_text = (message.text or "").replace("/delete_product_", "", 1)
+@router.callback_query(F.data.startswith("seller_delete:"))
+async def seller_delete_product(callback: CallbackQuery, bot: Bot) -> None:
+    product_id_text = callback.data.split(":", maxsplit=1)[1]
     if not product_id_text.isdigit():
-        await message.answer("Noto'g'ri product id.")
+        await callback.answer("Noto'g'ri product id.", show_alert=True)
         return
 
     product_id = int(product_id_text)
 
     try:
         async with get_session() as session:
-            user = await UserService.get_or_create(session, message.from_user.id)
+            user = await UserService.get_or_create(session, callback.from_user.id)
             product = await ProductService.get_product_for_update(session, user, product_id)
 
             if product.channel_id and product.message_id:
@@ -98,13 +106,13 @@ async def seller_delete_product(message: Message, bot: Bot) -> None:
             await ProductService.delete_product(session, user, product_id)
             await session.commit()
     except ProductAccessError:
-        await message.answer("Siz faqat o'zingizning mahsulotingizni o'chira olasiz.")
+        await callback.answer("Siz faqat o'zingizning mahsulotingizni o'chira olasiz.", show_alert=True)
         return
     except LookupError:
-        await message.answer("Mahsulot topilmadi.")
+        await callback.answer("Mahsulot topilmadi.", show_alert=True)
         return
-    except SQLAlchemyError:
-        await message.answer("Mahsulotni o'chirishda xatolik.")
+    except (SQLAlchemyError, RuntimeError):
+        await callback.answer("Mahsulotni o'chirishda xatolik.", show_alert=True)
         return
 
-    await message.answer("Mahsulot o'chirildi.")
+    await callback.answer("Mahsulot o'chirildi", show_alert=True)

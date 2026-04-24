@@ -63,7 +63,7 @@ async def seller_select(callback: CallbackQuery) -> None:
     try:
         async with get_session() as session:
             products = await ProductService.list_products_by_seller(session, seller_id)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, RuntimeError):
         await callback.message.answer("Mahsulotlarni olishda xatolik.")
         await callback.answer()
         return

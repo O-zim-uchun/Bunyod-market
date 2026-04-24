@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import get_session
@@ -28,10 +28,13 @@ def _admin_id() -> int | None:
 
 
 async def _ensure_super_admin(message: Message) -> bool:
-    async with get_session() as session:
-        user = await UserService.get_or_create(session, message.from_user.id, admin_id=_admin_id())
-        await session.commit()
-        return user.role == "super_admin"
+    try:
+        async with get_session() as session:
+            user = await UserService.get_or_create(session, message.from_user.id, admin_id=_admin_id())
+            await session.commit()
+            return user.role == "super_admin"
+    except Exception:
+        return False
 
 
 @router.message(Command("admin"))
@@ -78,6 +81,8 @@ async def admin_add_seller_get_name(message: Message, state: FSMContext) -> None
         await message.answer(f"✅ Seller yaratildi: {seller.id} - {seller.name}")
     except SQLAlchemyError:
         await message.answer("Seller yaratishda DB xatolik yuz berdi.")
+    except RuntimeError as exc:
+        await message.answer(str(exc))
     finally:
         await state.clear()
 
@@ -90,7 +95,7 @@ async def admin_sellers(message: Message) -> None:
     try:
         async with get_session() as session:
             sellers = await SellerService.list_all_sellers(session)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, RuntimeError):
         await message.answer("Sellerlarni olishda xatolik yuz berdi.")
         return
 
@@ -98,34 +103,37 @@ async def admin_sellers(message: Message) -> None:
         await message.answer("Sellerlar topilmadi.")
         return
 
-    lines = []
     for seller in sellers:
-        lines.append(f"{seller.id}. {seller.name} (tg:{seller.telegram_id}) | /admin_delete_seller_{seller.id}")
-    await message.answer("📋 Sellerlar:\n" + "\n".join(lines))
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="❌ O'chirish", callback_data=f"admin_del_seller:{seller.id}")]]
+        )
+        await message.answer(
+            f"{seller.id}. {seller.name} (tg:{seller.telegram_id})",
+            reply_markup=kb,
+        )
 
 
-@router.message(F.text.startswith("/admin_delete_seller_"))
-async def admin_delete_seller(message: Message) -> None:
-    if not await _ensure_super_admin(message):
-        return
-
-    seller_id_text = (message.text or "").replace("/admin_delete_seller_", "", 1)
+@router.callback_query(F.data.startswith("admin_del_seller:"))
+async def admin_delete_seller_cb(callback: CallbackQuery) -> None:
+    seller_id_text = callback.data.split(":", maxsplit=1)[1]
     if not seller_id_text.isdigit():
-        await message.answer("Noto'g'ri seller id")
+        await callback.answer("Noto'g'ri id", show_alert=True)
         return
 
     try:
         async with get_session() as session:
+            user = await UserService.get_or_create(session, callback.from_user.id, admin_id=_admin_id())
+            if user.role != "super_admin":
+                await callback.answer("Ruxsat yo'q", show_alert=True)
+                return
+
             deleted = await SellerService.delete_seller(session, int(seller_id_text))
             await session.commit()
-    except SQLAlchemyError:
-        await message.answer("Sellerni o'chirishda xatolik.")
+    except (SQLAlchemyError, RuntimeError):
+        await callback.answer("Xatolik", show_alert=True)
         return
 
-    if not deleted:
-        await message.answer("Seller topilmadi.")
-    else:
-        await message.answer("Seller o'chirildi.")
+    await callback.answer("Seller o'chirildi" if deleted else "Seller topilmadi", show_alert=True)
 
 
 @router.message(Command("admin_products"))
@@ -136,7 +144,7 @@ async def admin_products(message: Message) -> None:
     try:
         async with get_session() as session:
             products = await ProductService.list_all_with_seller(session)
-    except SQLAlchemyError:
+    except (SQLAlchemyError, RuntimeError):
         await message.answer("Mahsulotlarni olishda xatolik.")
         return
 
