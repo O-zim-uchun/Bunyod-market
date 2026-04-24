@@ -5,7 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
+from app.models.seller import Seller
 from app.models.user import User
+
+
+CATEGORIES: dict[str, str] = {
+    "telefon": "📱 Telefon",
+    "texnika": "💻 Texnika",
+    "kiyim": "👕 Kiyim",
+    "boshqa": "🏠 Boshqa",
+}
 
 
 class ProductAccessError(PermissionError):
@@ -36,6 +45,29 @@ class ProductService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_products_by_seller_category(
+        session: AsyncSession,
+        seller_id: int,
+        category: str,
+        page: int,
+        page_size: int = 5,
+    ) -> tuple[list[Product], int]:
+        total_result = await session.execute(
+            select(func.count(Product.id)).where(Product.seller_id == seller_id, Product.category == category)
+        )
+        total = int(total_result.scalar() or 0)
+
+        offset = max(page - 1, 0) * page_size
+        rows = await session.execute(
+            select(Product)
+            .where(Product.seller_id == seller_id, Product.category == category)
+            .order_by(Product.id.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        return list(rows.scalars().all()), total
+
+    @staticmethod
     async def seller_product_count(session: AsyncSession, seller_id: int) -> int:
         result = await session.execute(select(func.count(Product.id)).where(Product.seller_id == seller_id))
         return int(result.scalar() or 0)
@@ -52,6 +84,42 @@ class ProductService:
 
         product = Product(**product_payload)
         session.add(product)
+        await session.flush()
+        return product
+
+    @staticmethod
+    async def create_or_update_from_channel(
+        session: AsyncSession,
+        seller: Seller,
+        channel_id: int,
+        message_id: int,
+    ) -> Product:
+        existing = await session.execute(
+            select(Product).where(Product.channel_id == channel_id, Product.message_id == message_id)
+        )
+        product = existing.scalar_one_or_none()
+
+        if product is None:
+            product = Product(
+                seller_id=seller.id,
+                channel_id=channel_id,
+                message_id=message_id,
+                category=None,
+            )
+            session.add(product)
+        else:
+            product.seller_id = seller.id
+
+        await session.flush()
+        return product
+
+    @staticmethod
+    async def set_category(session: AsyncSession, product_id: int, category: str) -> Product | None:
+        product = await session.get(Product, product_id)
+        if product is None:
+            return None
+
+        product.category = category
         await session.flush()
         return product
 

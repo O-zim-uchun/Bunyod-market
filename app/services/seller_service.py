@@ -19,8 +19,15 @@ class SellerService:
         return list(result.scalars().all())
 
     @staticmethod
-    async def create_seller(session: AsyncSession, telegram_id: int, name: str) -> Seller:
-        seller = Seller(name=name, telegram_id=telegram_id)
+    async def get_by_channel_id(session: AsyncSession, channel_id: int) -> Seller | None:
+        result = await session.execute(select(Seller).where(Seller.channel_id == channel_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create_seller(
+        session: AsyncSession, telegram_id: int, name: str, channel_id: int | None = None
+    ) -> Seller:
+        seller = Seller(name=name, telegram_id=telegram_id, channel_id=channel_id)
         session.add(seller)
         await session.flush()
 

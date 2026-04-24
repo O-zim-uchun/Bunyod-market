@@ -1,12 +1,13 @@
+from math import ceil
 from os import getenv
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import get_session
-from app.services.product_service import ProductService
+from app.services.product_service import CATEGORIES, ProductService
 from app.services.seller_service import SellerService
 from app.services.user_service import UserService
 
@@ -18,6 +19,30 @@ def _admin_id() -> int | None:
     if value and value.isdigit():
         return int(value)
     return None
+
+
+def _categories_keyboard(seller_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"user_cat:{seller_id}:{slug}:1")]
+            for slug, label in CATEGORIES.items()
+        ]
+    )
+
+
+def _pagination_keyboard(seller_id: int, category: str, page: int, pages: int) -> InlineKeyboardMarkup:
+    buttons = []
+    if page > 1:
+        buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"user_cat:{seller_id}:{category}:{page - 1}"))
+    buttons.append(InlineKeyboardButton(text=f"{page}/{pages}", callback_data="noop"))
+    if page < pages:
+        buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"user_cat:{seller_id}:{category}:{page + 1}"))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+@router.callback_query(F.data == "noop")
+async def noop_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 @router.message(CommandStart())
@@ -59,19 +84,49 @@ async def start_handler(message: Message) -> None:
 @router.callback_query(F.data.startswith("seller_select:"))
 async def seller_select(callback: CallbackQuery) -> None:
     seller_id = int(callback.data.split(":", maxsplit=1)[1])
+    await callback.message.answer("Kategoriyani tanlang:", reply_markup=_categories_keyboard(seller_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("user_cat:"))
+async def user_category_products(callback: CallbackQuery, bot: Bot) -> None:
+    _, seller_id_text, category, page_text = callback.data.split(":", maxsplit=3)
+    if not seller_id_text.isdigit() or not page_text.isdigit() or category not in CATEGORIES:
+        await callback.answer("Noto'g'ri filter", show_alert=True)
+        return
+
+    seller_id = int(seller_id_text)
+    page = max(int(page_text), 1)
 
     try:
         async with get_session() as session:
-            products = await ProductService.list_products_by_seller(session, seller_id)
+            products, total = await ProductService.list_products_by_seller_category(session, seller_id, category, page=page)
     except (SQLAlchemyError, RuntimeError):
         await callback.message.answer("Mahsulotlarni olishda xatolik.")
         await callback.answer()
         return
 
-    if not products:
-        await callback.message.answer("Bu sellerda mahsulotlar hali yo'q.")
-    else:
-        ids = ", ".join(str(product.id) for product in products)
-        await callback.message.answer(f"Seller mahsulotlari: {ids}")
+    if total == 0:
+        await callback.message.answer("Bu kategoriyada mahsulot yo'q.")
+        await callback.answer()
+        return
 
+    for product in products:
+        if product.channel_id and product.message_id:
+            try:
+                await bot.copy_message(
+                    chat_id=callback.message.chat.id,
+                    from_chat_id=product.channel_id,
+                    message_id=int(product.message_id),
+                )
+                continue
+            except Exception:
+                pass
+        await callback.message.answer(f"Mahsulot ID: {product.id}")
+
+    pages = max(ceil(total / 5), 1)
+    await callback.message.answer(
+        f"Kategoriya: {CATEGORIES[category]} | Jami: {total}",
+        reply_markup=_pagination_keyboard(seller_id=seller_id, category=category, page=page, pages=pages),
+    )
     await callback.answer()

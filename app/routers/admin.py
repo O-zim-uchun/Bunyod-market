@@ -18,6 +18,7 @@ router = Router(name="admin_router")
 class AddSellerState(StatesGroup):
     waiting_telegram_id = State()
     waiting_name = State()
+    waiting_channel_id = State()
 
 
 def _admin_id() -> int | None:
@@ -66,17 +67,40 @@ async def admin_add_seller_get_tg(message: Message, state: FSMContext) -> None:
 
 @router.message(AddSellerState.waiting_name, F.text)
 async def admin_add_seller_get_name(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    telegram_id = int(data["telegram_id"])
     name = (message.text or "").strip()
-
     if not name:
         await message.answer("Nom bo'sh bo'lmasin.")
         return
 
+    await state.update_data(name=name)
+    await state.set_state(AddSellerState.waiting_channel_id)
+    await message.answer("Seller kanal ID sini kiriting (masalan -100123...), yoki `skip` yozing.")
+
+
+@router.message(AddSellerState.waiting_channel_id, F.text)
+async def admin_add_seller_get_channel(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    telegram_id = int(data["telegram_id"])
+    name = data["name"]
+
+    text = (message.text or "").strip()
+    channel_id: int | None
+    if text.lower() == "skip":
+        channel_id = None
+    elif text.lstrip("-").isdigit():
+        channel_id = int(text)
+    else:
+        await message.answer("Kanal ID noto'g'ri. Raqam yoki `skip` yuboring.")
+        return
+
     try:
         async with get_session() as session:
-            seller = await SellerService.create_seller(session, telegram_id=telegram_id, name=name)
+            seller = await SellerService.create_seller(
+                session,
+                telegram_id=telegram_id,
+                name=name,
+                channel_id=channel_id,
+            )
             await session.commit()
         await message.answer(f"✅ Seller yaratildi: {seller.id} - {seller.name}")
     except SQLAlchemyError:
@@ -108,7 +132,7 @@ async def admin_sellers(message: Message) -> None:
             inline_keyboard=[[InlineKeyboardButton(text="❌ O'chirish", callback_data=f"admin_del_seller:{seller.id}")]]
         )
         await message.answer(
-            f"{seller.id}. {seller.name} (tg:{seller.telegram_id})",
+            f"{seller.id}. {seller.name} (tg:{seller.telegram_id})\nchannel: {seller.channel_id}",
             reply_markup=kb,
         )
 
@@ -155,6 +179,6 @@ async def admin_products(message: Message) -> None:
     lines = []
     for product in products:
         seller_name = product.seller.name if product.seller else "NULL"
-        lines.append(f"{product.id} -> seller: {seller_name} ({product.seller_id})")
+        lines.append(f"{product.id} -> seller: {seller_name} ({product.seller_id}) | category: {product.category}")
 
     await message.answer("📦 Barcha mahsulotlar:\n" + "\n".join(lines))

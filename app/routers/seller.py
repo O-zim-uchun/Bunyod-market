@@ -1,13 +1,85 @@
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.session import get_session
-from app.services.product_service import ProductAccessError, ProductService
+from app.services.product_service import CATEGORIES, ProductAccessError, ProductService
+from app.services.seller_service import SellerService
 from app.services.user_service import UserService
 
 router = Router(name="seller_router")
+
+
+def _category_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"set_cat:{product_id}:{slug}")]
+            for slug, label in CATEGORIES.items()
+        ]
+    )
+
+
+@router.channel_post()
+async def on_channel_post(message: Message, bot: Bot) -> None:
+    if message.chat.type != ChatType.CHANNEL:
+        return
+
+    try:
+        async with get_session() as session:
+            seller = await SellerService.get_by_channel_id(session, message.chat.id)
+            if seller is None:
+                return
+
+            product = await ProductService.create_or_update_from_channel(
+                session=session,
+                seller=seller,
+                channel_id=message.chat.id,
+                message_id=message.message_id,
+            )
+            await session.commit()
+
+        await bot.send_message(
+            seller.telegram_id,
+            "Yangi mahsulot qo'shildi. Turini tanlang:",
+            reply_markup=_category_keyboard(product.id),
+        )
+    except (SQLAlchemyError, RuntimeError):
+        return
+
+
+@router.edited_channel_post()
+async def on_edited_channel_post(message: Message, bot: Bot) -> None:
+    await on_channel_post(message, bot)
+
+
+@router.callback_query(F.data.startswith("set_cat:"))
+async def set_product_category(callback: CallbackQuery) -> None:
+    _, product_id_text, category = callback.data.split(":", maxsplit=2)
+    if not product_id_text.isdigit() or category not in CATEGORIES:
+        await callback.answer("Noto'g'ri ma'lumot", show_alert=True)
+        return
+
+    try:
+        async with get_session() as session:
+            user = await UserService.get_or_create(session, callback.from_user.id)
+            if user.role != "seller":
+                await callback.answer("Faqat seller uchun", show_alert=True)
+                return
+
+            product = await ProductService.get_product_for_update(session, user, int(product_id_text))
+            if product is None:
+                await callback.answer("Mahsulot topilmadi", show_alert=True)
+                return
+
+            await ProductService.set_category(session, product.id, category)
+            await session.commit()
+    except (SQLAlchemyError, RuntimeError, ProductAccessError):
+        await callback.answer("Kategoriya saqlanmadi", show_alert=True)
+        return
+
+    await callback.answer("Kategoriya saqlandi ✅", show_alert=True)
 
 
 @router.message(Command("seller"))
@@ -43,7 +115,8 @@ async def seller_warehouse(message: Message) -> None:
                 [InlineKeyboardButton(text="❌ O'chirish", callback_data=f"seller_delete:{item.id}")],
             ]
         )
-        await message.answer(f"Mahsulot ID: {item.id}", reply_markup=kb)
+        cat = CATEGORIES.get(item.category or "", "Kategoriya tanlanmagan")
+        await message.answer(f"Mahsulot ID: {item.id}\nTur: {cat}", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("seller_preview:"))
