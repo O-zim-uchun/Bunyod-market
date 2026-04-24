@@ -2,23 +2,11 @@ import asyncio
 import logging
 from os import getenv
 
-from aiogram import Bot, Dispatcher, Router
-from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram import Bot, Dispatcher
 
-
-router = Router()
-
-
-@router.message(CommandStart())
-async def start_handler(message: Message) -> None:
-    await message.answer("Assalomu alaykum! Bot ishga tushdi ✅")
-
-
-@router.message()
-async def echo_handler(message: Message) -> None:
-    if message.text:
-        await message.answer(message.text)
+from app.routers.admin import router as admin_router
+from app.routers.seller import router as seller_router
+from app.routers.user import router as user_router
 
 
 def get_bot_token() -> str:
@@ -35,7 +23,10 @@ async def main() -> None:
 
     bot = Bot(token=get_bot_token())
     dp = Dispatcher()
-    dp.include_router(router)
+
+    dp.include_router(admin_router)
+    dp.include_router(seller_router)
+    dp.include_router(user_router)
 
     try:
         await dp.start_polling(bot)

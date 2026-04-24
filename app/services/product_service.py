@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
@@ -23,6 +23,16 @@ class ProductService:
         stmt = cls._apply_role_filter(select(Product), user)
         result = await session.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    async def list_products_by_seller(session: AsyncSession, seller_id: int) -> list[Product]:
+        result = await session.execute(select(Product).where(Product.seller_id == seller_id))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def seller_product_count(session: AsyncSession, seller_id: int) -> int:
+        result = await session.execute(select(func.count(Product.id)).where(Product.seller_id == seller_id))
+        return int(result.scalar() or 0)
 
     @classmethod
     async def create_product(
