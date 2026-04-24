@@ -4,6 +4,7 @@ from os import getenv
 
 from aiogram import Bot, Dispatcher
 
+from app.db.session import init_models
 from app.routers.admin import router as admin_router
 from app.routers.seller import router as seller_router
 from app.routers.user import router as user_router
@@ -21,6 +22,8 @@ def get_bot_token() -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
+    await init_models()
+
     bot = Bot(token=get_bot_token())
     dp = Dispatcher()
 
@@ -28,10 +31,14 @@ async def main() -> None:
     dp.include_router(seller_router)
     dp.include_router(user_router)
 
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    while True:
+        try:
+            await dp.start_polling(bot)
+        except Exception:
+            logging.exception("Polling xatoligi, 5 soniyadan keyin qayta ishga tushadi")
+            await asyncio.sleep(5)
+        else:
+            break
 
 
 if __name__ == "__main__":

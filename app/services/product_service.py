@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.product import Product
 from app.models.user import User
@@ -21,12 +22,17 @@ class ProductService:
     @classmethod
     async def list_products(cls, session: AsyncSession, user: User) -> list[Product]:
         stmt = cls._apply_role_filter(select(Product), user)
-        result = await session.execute(stmt)
+        result = await session.execute(stmt.order_by(Product.id.asc()))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_all_with_seller(session: AsyncSession) -> list[Product]:
+        result = await session.execute(select(Product).options(selectinload(Product.seller)).order_by(Product.id.asc()))
         return list(result.scalars().all())
 
     @staticmethod
     async def list_products_by_seller(session: AsyncSession, seller_id: int) -> list[Product]:
-        result = await session.execute(select(Product).where(Product.seller_id == seller_id))
+        result = await session.execute(select(Product).where(Product.seller_id == seller_id).order_by(Product.id.asc()))
         return list(result.scalars().all())
 
     @staticmethod
@@ -67,7 +73,8 @@ class ProductService:
         return product
 
     @classmethod
-    async def delete_product(cls, session: AsyncSession, user: User, product_id: int) -> None:
+    async def delete_product(cls, session: AsyncSession, user: User, product_id: int) -> Product:
         product = await cls.get_product_for_update(session, user, product_id)
         await session.delete(product)
         await session.flush()
+        return product
