@@ -1,2 +1,2 @@
-# Elite-bot
-Siroj do'kon
+Biznes bot
+O'zim uchun
