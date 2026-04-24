@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.db.session import get_session
 from app.services.product_service import ProductService
@@ -103,6 +103,8 @@ async def admin_add_seller_get_channel(message: Message, state: FSMContext) -> N
             )
             await session.commit()
         await message.answer(f"✅ Seller yaratildi: {seller.id} - {seller.name}")
+    except IntegrityError:
+        await message.answer("Seller ma'lumotlari noyob bo'lishi kerak (telegram_id/channel_id band bo'lishi mumkin).")
     except SQLAlchemyError:
         await message.answer("Seller yaratishda DB xatolik yuz berdi.")
     except RuntimeError as exc:

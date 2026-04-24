@@ -27,9 +27,19 @@ class SellerService:
     async def create_seller(
         session: AsyncSession, telegram_id: int, name: str, channel_id: int | None = None
     ) -> Seller:
-        seller = Seller(name=name, telegram_id=telegram_id, channel_id=channel_id)
-        session.add(seller)
-        await session.flush()
+        existing_seller_result = await session.execute(select(Seller).where(Seller.telegram_id == telegram_id))
+        seller = existing_seller_result.scalar_one_or_none()
+
+        if seller is None:
+            seller = Seller(name=name, telegram_id=telegram_id, channel_id=channel_id)
+            session.add(seller)
+            await session.flush()
+        else:
+            seller.name = name
+            if channel_id is not None:
+                seller.channel_id = channel_id
+            seller.is_active = True
+            await session.flush()
 
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
