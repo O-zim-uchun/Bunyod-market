@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, func, select
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import Select, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,17 +33,41 @@ class ProductService:
     @classmethod
     async def list_products(cls, session: AsyncSession, user: User) -> list[Product]:
         stmt = cls._apply_role_filter(select(Product), user)
-        result = await session.execute(stmt.order_by(Product.id.asc()))
+        result = await session.execute(stmt.order_by(Product.created_at.desc(), Product.id.desc()))
         return list(result.scalars().all())
 
     @staticmethod
     async def list_all_with_seller(session: AsyncSession) -> list[Product]:
-        result = await session.execute(select(Product).options(selectinload(Product.seller)).order_by(Product.id.asc()))
+        result = await session.execute(
+            select(Product).options(selectinload(Product.seller)).order_by(Product.created_at.desc(), Product.id.desc())
+        )
         return list(result.scalars().all())
 
     @staticmethod
     async def list_products_by_seller(session: AsyncSession, seller_id: int) -> list[Product]:
-        result = await session.execute(select(Product).where(Product.seller_id == seller_id).order_by(Product.id.asc()))
+        result = await session.execute(
+            select(Product)
+            .where(Product.seller_id == seller_id)
+            .order_by(Product.created_at.desc(), Product.id.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_seller_categories(session: AsyncSession, seller_id: int) -> list[str]:
+        result = await session.execute(
+            select(distinct(Product.category))
+            .where(Product.seller_id == seller_id, Product.category.is_not(None))
+            .order_by(Product.category.asc())
+        )
+        return [row[0] for row in result.all() if row[0]]
+
+    @staticmethod
+    async def list_seller_products_by_category(session: AsyncSession, seller_id: int, category: str) -> list[Product]:
+        result = await session.execute(
+            select(Product)
+            .where(Product.seller_id == seller_id, Product.category == category)
+            .order_by(Product.created_at.desc(), Product.id.desc())
+        )
         return list(result.scalars().all())
 
     @staticmethod
@@ -61,7 +87,25 @@ class ProductService:
         rows = await session.execute(
             select(Product)
             .where(Product.seller_id == seller_id, Product.category == category)
-            .order_by(Product.id.desc())
+            .order_by(Product.created_at.desc(), Product.id.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        return list(rows.scalars().all()), total
+
+    @staticmethod
+    async def list_new_arrivals(session: AsyncSession, seller_id: int, page: int, page_size: int = 5) -> tuple[list[Product], int]:
+        threshold = datetime.now(timezone.utc) - timedelta(days=10)
+        total_result = await session.execute(
+            select(func.count(Product.id)).where(Product.seller_id == seller_id, Product.created_at >= threshold)
+        )
+        total = int(total_result.scalar() or 0)
+
+        offset = max(page - 1, 0) * page_size
+        rows = await session.execute(
+            select(Product)
+            .where(Product.seller_id == seller_id, Product.created_at >= threshold)
+            .order_by(Product.created_at.desc(), Product.id.desc())
             .offset(offset)
             .limit(page_size)
         )

@@ -4,10 +4,12 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.db.session import get_session
+from app.models.user import User
 from app.services.product_service import ProductService
 from app.services.seller_service import SellerService
 from app.services.user_service import UserService
@@ -19,6 +21,20 @@ class AddSellerState(StatesGroup):
     waiting_telegram_id = State()
     waiting_name = State()
     waiting_channel_id = State()
+
+
+class BroadcastState(StatesGroup):
+    waiting_message = State()
+
+
+def admin_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="👤 Sellerlar"), KeyboardButton(text="📦 Barcha mahsulotlar")],
+            [KeyboardButton(text="📤Mijozga xabar")],
+        ],
+        resize_keyboard=True,
+    )
 
 
 def _admin_id() -> int | None:
@@ -42,7 +58,35 @@ async def _ensure_super_admin(message: Message) -> bool:
 async def admin_panel(message: Message) -> None:
     if not await _ensure_super_admin(message):
         return
-    await message.answer("📊 Admin panel\n👤 Sellerlar: /admin_sellers\n➕ Seller qo'shish: /admin_add_seller\n📦 Barcha mahsulotlar: /admin_products")
+    await message.answer("📊 Admin panel", reply_markup=admin_menu_keyboard())
+
+
+@router.message(F.text == "👤 Sellerlar")
+@router.message(Command("admin_sellers"))
+async def admin_sellers(message: Message) -> None:
+    if not await _ensure_super_admin(message):
+        return
+
+    try:
+        async with get_session() as session:
+            sellers = await SellerService.list_all_sellers(session)
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Sellerlarni olishda xatolik yuz berdi.")
+        return
+
+    if not sellers:
+        await message.answer("Sellerlar topilmadi.")
+        return
+
+    await message.answer("➕ Seller qo'shish: /admin_add_seller")
+    for seller in sellers:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="❌ O'chirish", callback_data=f"admin_del_seller:{seller.id}")]]
+        )
+        await message.answer(
+            f"{seller.id}. {seller.name} (tg:{seller.telegram_id})\nchannel: {seller.channel_id}",
+            reply_markup=kb,
+        )
 
 
 @router.message(Command("admin_add_seller"))
@@ -113,32 +157,6 @@ async def admin_add_seller_get_channel(message: Message, state: FSMContext) -> N
         await state.clear()
 
 
-@router.message(Command("admin_sellers"))
-async def admin_sellers(message: Message) -> None:
-    if not await _ensure_super_admin(message):
-        return
-
-    try:
-        async with get_session() as session:
-            sellers = await SellerService.list_all_sellers(session)
-    except (SQLAlchemyError, RuntimeError):
-        await message.answer("Sellerlarni olishda xatolik yuz berdi.")
-        return
-
-    if not sellers:
-        await message.answer("Sellerlar topilmadi.")
-        return
-
-    for seller in sellers:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="❌ O'chirish", callback_data=f"admin_del_seller:{seller.id}")]]
-        )
-        await message.answer(
-            f"{seller.id}. {seller.name} (tg:{seller.telegram_id})\nchannel: {seller.channel_id}",
-            reply_markup=kb,
-        )
-
-
 @router.callback_query(F.data.startswith("admin_del_seller:"))
 async def admin_delete_seller_cb(callback: CallbackQuery) -> None:
     seller_id_text = callback.data.split(":", maxsplit=1)[1]
@@ -162,6 +180,7 @@ async def admin_delete_seller_cb(callback: CallbackQuery) -> None:
     await callback.answer("Seller o'chirildi" if deleted else "Seller topilmadi", show_alert=True)
 
 
+@router.message(F.text == "📦 Barcha mahsulotlar")
 @router.message(Command("admin_products"))
 async def admin_products(message: Message) -> None:
     if not await _ensure_super_admin(message):
@@ -184,3 +203,31 @@ async def admin_products(message: Message) -> None:
         lines.append(f"{product.id} -> seller: {seller_name} ({product.seller_id}) | category: {product.category}")
 
     await message.answer("📦 Barcha mahsulotlar:\n" + "\n".join(lines))
+
+
+@router.message(F.text == "📤Mijozga xabar")
+async def admin_broadcast_start(message: Message, state: FSMContext) -> None:
+    if not await _ensure_super_admin(message):
+        return
+    await state.set_state(BroadcastState.waiting_message)
+    await message.answer("Mijozlarga yuboriladigan xabarni yuboring.")
+
+
+@router.message(BroadcastState.waiting_message)
+async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
+    sent = 0
+    try:
+        async with get_session() as session:
+            users = await session.execute(select(User).where(User.role == "user", User.telegram_id.is_not(None)))
+            rows = users.scalars().all()
+
+        for user in rows:
+            try:
+                await message.copy_to(chat_id=user.telegram_id)
+                sent += 1
+            except Exception:
+                continue
+
+        await message.answer(f"Yuborildi: {sent} ta foydalanuvchi")
+    finally:
+        await state.clear()
