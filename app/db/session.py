@@ -8,7 +8,31 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models import Base
 
-DATABASE_URL = getenv("DATABASE_URL") or getenv("POSTGRES_URL")
+
+def _normalize_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = value.strip().strip('"').strip("'")
+    if not cleaned:
+        return None
+    return cleaned
+
+
+def _resolve_database_url() -> str | None:
+    primary = _normalize_url(getenv("DATABASE_URL"))
+    public = _normalize_url(getenv("DATABASE_PUBLIC_URL"))
+    postgres = _normalize_url(getenv("POSTGRES_URL"))
+
+    if primary and primary.startswith(("postgresql+asyncpg://", "postgresql://")):
+        return primary
+    if public and public.startswith(("postgresql+asyncpg://", "postgresql://")):
+        return public
+    if postgres and postgres.startswith(("postgresql+asyncpg://", "postgresql://")):
+        return postgres
+    return None
+
+
+DATABASE_URL = _resolve_database_url()
 
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _engine = None
@@ -53,7 +77,10 @@ async def _ensure_runtime_columns() -> None:
 
 async def init_models() -> None:
     if _engine is None:
-        raise RuntimeError("DATABASE_URL (yoki POSTGRES_URL) Railway Variables'da o'rnatilmagan")
+        raise RuntimeError(
+            "DATABASE_URL/DATABASE_PUBLIC_URL noto'g'ri. "
+            "Railway Variables'da postgresql+asyncpg://... formatida kiriting."
+        )
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -64,7 +91,10 @@ async def init_models() -> None:
 @asynccontextmanager
 async def get_session() -> AsyncSession:
     if _session_factory is None:
-        raise RuntimeError("DATABASE_URL (yoki POSTGRES_URL) Railway Variables'da o'rnatilmagan")
+        raise RuntimeError(
+            "DATABASE_URL/DATABASE_PUBLIC_URL topilmadi yoki noto'g'ri. "
+            "Railway Variables'da postgresql+asyncpg://... URL kiriting."
+        )
 
     async with _session_factory() as session:
         yield session
