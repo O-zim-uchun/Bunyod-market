@@ -9,8 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.db.session import get_session
+from app.models.seller import Seller
 from app.models.user import User
 from app.services.product_service import ProductService
+from app.services.seller_content_service import SellerContentService
 from app.services.seller_service import SellerService
 from app.services.user_service import UserService
 
@@ -27,11 +29,15 @@ class BroadcastState(StatesGroup):
     waiting_message = State()
 
 
+class TezGoState(StatesGroup):
+    waiting_message = State()
+
+
 def admin_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="👤 Sellerlar"), KeyboardButton(text="📦 Barcha mahsulotlar")],
-            [KeyboardButton(text="📤Mijozga xabar")],
+            [KeyboardButton(text="📤Mijozga xabar"), KeyboardButton(text="⚡️TezGo sozlash")],
         ],
         resize_keyboard=True,
     )
@@ -52,6 +58,22 @@ async def _ensure_super_admin(message: Message) -> bool:
             return user.role == "super_admin"
     except Exception:
         return False
+
+
+async def _ensure_admin_seller(session, user: User) -> int:
+    if user.seller_id:
+        return user.seller_id
+
+    row = await session.execute(select(Seller).where(Seller.telegram_id == user.telegram_id))
+    seller = row.scalar_one_or_none()
+    if seller is None:
+        seller = Seller(name="Katta bozor", telegram_id=user.telegram_id)
+        session.add(seller)
+        await session.flush()
+
+    user.seller_id = seller.id
+    await session.flush()
+    return seller.id
 
 
 @router.message(Command("admin"))
@@ -229,5 +251,39 @@ async def admin_broadcast_send(message: Message, state: FSMContext) -> None:
                 continue
 
         await message.answer(f"Yuborildi: {sent} ta foydalanuvchi")
+    finally:
+        await state.clear()
+
+
+@router.message(F.text == "⚡️TezGo sozlash")
+async def admin_set_tezgo_start(message: Message, state: FSMContext) -> None:
+    if not await _ensure_super_admin(message):
+        return
+    await state.set_state(TezGoState.waiting_message)
+    await message.answer("⚡️TezGo uchun post yuboring.")
+
+
+@router.message(TezGoState.waiting_message)
+async def admin_set_tezgo_save(message: Message, state: FSMContext) -> None:
+    try:
+        async with get_session() as session:
+            user = await UserService.get_or_create(session, message.from_user.id, admin_id=_admin_id())
+            if user.role != "super_admin":
+                await message.answer("Ruxsat yo'q")
+                await state.clear()
+                return
+
+            seller_id = await _ensure_admin_seller(session, user)
+            await SellerContentService.set_content(
+                session=session,
+                seller_id=seller_id,
+                content_type="tezgo",
+                channel_id=message.chat.id,
+                message_id=message.message_id,
+            )
+            await session.commit()
+        await message.answer("⚡️TezGo saqlandi ✅")
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Saqlashda xatolik")
     finally:
         await state.clear()

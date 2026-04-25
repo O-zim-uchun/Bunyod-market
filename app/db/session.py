@@ -37,6 +37,7 @@ async def _ensure_runtime_columns() -> None:
         # sellers
         "CREATE TABLE IF NOT EXISTS sellers (id BIGSERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, telegram_id BIGINT NOT NULL UNIQUE, channel_id BIGINT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
         "CREATE TABLE IF NOT EXISTS seller_contents (id BIGSERIAL PRIMARY KEY, seller_id BIGINT NOT NULL REFERENCES sellers(id) ON DELETE CASCADE, content_type VARCHAR(32) NOT NULL, channel_id BIGINT NULL, message_id BIGINT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CONSTRAINT uq_seller_content_type UNIQUE (seller_id, content_type))",
+        "CREATE TABLE IF NOT EXISTS favorites (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, seller_id BIGINT NOT NULL REFERENCES sellers(id) ON DELETE CASCADE, product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CONSTRAINT uq_favorite_user_product UNIQUE (user_id, product_id))",
     ]
 
     async with _engine.begin() as conn:
