@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.favorite import Favorite
+from app.models.product import Product
 from app.models.seller import Seller
+from app.models.seller_content import SellerContent
 from app.models.user import User
 
 
@@ -58,6 +61,10 @@ class SellerService:
         seller = await session.get(Seller, seller_id)
         if seller is None:
             return False
+
+        await session.execute(delete(Favorite).where(Favorite.seller_id == seller_id))
+        await session.execute(delete(SellerContent).where(SellerContent.seller_id == seller_id))
+        await session.execute(update(Product).where(Product.seller_id == seller_id).values(seller_id=None))
 
         users = await session.execute(select(User).where(User.seller_id == seller_id))
         for user in users.scalars().all():

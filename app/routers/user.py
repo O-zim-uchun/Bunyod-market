@@ -32,6 +32,16 @@ def _admin_id() -> int | None:
     return None
 
 
+def _client_bot_token() -> str | None:
+    value = (getenv("CLIENT_BOT_TOKEN") or "").strip()
+    return value or None
+
+
+def _is_client_bot(bot: Bot | None) -> bool:
+    token = _client_bot_token()
+    return bool(token and bot and bot.token == token)
+
+
 def _is_public_user_entry_event(event: Message | CallbackQuery) -> bool:
     if isinstance(event, Message):
         text = (event.text or "").strip()
@@ -85,6 +95,10 @@ class UserRoleMiddleware(BaseMiddleware):
         if _is_public_user_entry_event(event):
             return await handler(event, data)
 
+        bot = getattr(event, "bot", None)
+        if _is_client_bot(bot):
+            return await handler(event, data)
+
         telegram_user = getattr(event, "from_user", None)
         if telegram_user is None:
             return await handler(event, data)
@@ -129,14 +143,6 @@ def _remove_clicked_button(markup: InlineKeyboardMarkup | None, clicked_data: st
     return InlineKeyboardMarkup(inline_keyboard=new_rows) if new_rows else None
 
 
-def _static_buttons_row(seller_id: int) -> list[InlineKeyboardButton]:
-    return [
-        InlineKeyboardButton(text="⚖️Katta bozor", callback_data="market:1"),
-        InlineKeyboardButton(text="⚡️TezGo", callback_data="tezgo:1"),
-        InlineKeyboardButton(text="⬅️ Ortga", callback_data=f"back:seller:{seller_id}"),
-    ]
-
-
 def _seller_sections_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -156,7 +162,6 @@ def _categories_keyboard(seller_id: int, categories: list[str]) -> InlineKeyboar
         [InlineKeyboardButton(text=CATEGORIES.get(slug, slug), callback_data=f"user_cat:{seller_id}:{slug}:1")]
         for slug in categories
     ]
-    rows.append(_static_buttons_row(seller_id))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -167,7 +172,7 @@ def _pagination_keyboard(prefix: str, seller_id: int, key: str, page: int, pages
     buttons.append(InlineKeyboardButton(text=f"{page}/{pages}", callback_data="noop"))
     if page < pages:
         buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:{seller_id}:{key}:{page + 1}"))
-    return InlineKeyboardMarkup(inline_keyboard=[buttons, _static_buttons_row(seller_id)])
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
 @router.message(Command("satr"))
@@ -187,13 +192,14 @@ async def start_handler(message: Message, state: FSMContext) -> None:
             user = await UserService.get_or_create(session, message.from_user.id, admin_id=_admin_id())
             await session.commit()
 
-            if user.role == "super_admin":
-                await message.answer("📊 Admin panel\n/admin")
-                return
+            if not _is_client_bot(message.bot):
+                if user.role == "super_admin":
+                    await message.answer("📊 Admin panel\n/admin")
+                    return
 
-            if user.role == "seller":
-                await message.answer("📦 Seller panel\n/seller")
-                return
+                if user.role == "seller":
+                    await message.answer("📦 Seller panel\n/seller")
+                    return
 
             sellers = await SellerService.list_active_sellers(session)
     except SQLAlchemyError:
