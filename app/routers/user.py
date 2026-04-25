@@ -6,7 +6,7 @@ from aiogram import Bot, F, Router
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -39,8 +39,49 @@ def _is_public_user_entry_event(event: Message | CallbackQuery) -> bool:
     return False
 
 
+def _is_user_flow_event(event: Message | CallbackQuery) -> bool:
+    if isinstance(event, Message):
+        text = (event.text or "").strip()
+        return text in {
+            "🛍 Tovarlar",
+            "🔥 Yangi kelganlar",
+            "💰 Aksiya",
+            "📞 Aloqa",
+            "❤️ Sevimlilar",
+            "⚖️Katta bozor",
+            "⚡️TezGo",
+            "⬅️ Ortga",
+        } or text.startswith("/start") or text.startswith("/satr")
+
+    if isinstance(event, CallbackQuery):
+        data = (event.data or "").strip()
+        return data.startswith(
+            (
+                "shop_page:",
+                "seller_select:",
+                "about:",
+                "back:seller:",
+                "user_shop:",
+                "user_cat:",
+                "fav:",
+                "user_favs:",
+                "user_new:",
+                "market:1",
+                "tezgo:1",
+                "user_promo:",
+                "user_contact:",
+                "noop",
+            )
+        )
+
+    return False
+
+
 class UserRoleMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        if not _is_user_flow_event(event):
+            return await handler(event, data)
+
         if _is_public_user_entry_event(event):
             return await handler(event, data)
 
@@ -96,16 +137,17 @@ def _static_buttons_row(seller_id: int) -> list[InlineKeyboardButton]:
     ]
 
 
-def _seller_sections_keyboard(seller_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🛍 Tovarlar", callback_data=f"user_shop:{seller_id}")],
-            [InlineKeyboardButton(text="🔥 Yangi kelganlar", callback_data=f"user_new:{seller_id}:1")],
-            [InlineKeyboardButton(text="💰 Aksiya", callback_data=f"user_promo:{seller_id}")],
-            [InlineKeyboardButton(text="📞 Aloqa", callback_data=f"user_contact:{seller_id}")],
-            [InlineKeyboardButton(text="❤️ Sevimlilar", callback_data=f"user_favs:{seller_id}")],
-            _static_buttons_row(seller_id),
+def _seller_sections_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🛍 Tovarlar"), KeyboardButton(text="🔥 Yangi kelganlar")],
+            [KeyboardButton(text="💰 Aksiya"), KeyboardButton(text="📞 Aloqa")],
+            [KeyboardButton(text="❤️ Sevimlilar")],
+            [KeyboardButton(text="⚖️Katta bozor"), KeyboardButton(text="⚡️TezGo")],
+            [KeyboardButton(text="⬅️ Ortga")],
         ]
+        ,
+        resize_keyboard=True,
     )
 
 
@@ -222,7 +264,7 @@ async def shops_page(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.startswith("seller_select:"))
-async def seller_select(callback: CallbackQuery) -> None:
+async def seller_select(callback: CallbackQuery, state: FSMContext) -> None:
     seller_id = int(callback.data.split(":", maxsplit=1)[1])
     async with get_session() as session:
         seller = await session.get(Seller, seller_id)
@@ -231,11 +273,9 @@ async def seller_select(callback: CallbackQuery) -> None:
         await callback.answer("Do'kon topilmadi", show_alert=True)
         return
 
-    info = f"🏪 {seller.name}\nID: {seller.id}\nKanal: {seller.channel_id or '—'}"
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Do'kon haqida", callback_data=f"about:{seller_id}")]]
-    )
-    await callback.message.answer(info, reply_markup=kb)
+    await state.update_data(selected_seller_id=seller_id)
+    info = f"🏪 {seller.name}\nDo'kon tanlandi."
+    await callback.message.answer(info, reply_markup=_seller_sections_keyboard())
     await callback.answer()
 
 
@@ -247,15 +287,48 @@ async def about_store(callback: CallbackQuery) -> None:
         await callback.message.edit_reply_markup(reply_markup=new_markup)
     except Exception:
         pass
-    await callback.message.answer("Do'kon paneli:", reply_markup=_seller_sections_keyboard(seller_id))
+    await callback.message.answer("Do'kon paneli:", reply_markup=_seller_sections_keyboard())
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("back:seller:"))
 async def back_to_store(callback: CallbackQuery) -> None:
-    seller_id = int(callback.data.split(":", maxsplit=2)[2])
-    await callback.message.answer("Do'kon paneli:", reply_markup=_seller_sections_keyboard(seller_id))
+    await callback.message.answer("Do'kon paneli:", reply_markup=_seller_sections_keyboard())
     await callback.answer()
+
+
+async def _selected_seller_id(state: FSMContext, message: Message) -> int | None:
+    data = await state.get_data()
+    seller_id = data.get("selected_seller_id")
+    if isinstance(seller_id, int):
+        return seller_id
+    await message.answer("Avval do'kon tanlang. /start bosing.")
+    return None
+
+
+@router.message(F.text == "⬅️ Ortga")
+async def back_button(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("selected_seller_id") is not None:
+        await state.update_data(selected_seller_id=None)
+    await _show_sellers_page(message, state, page=1)
+
+
+@router.message(F.text == "🛍 Tovarlar")
+async def user_shop_categories_text(message: Message, state: FSMContext) -> None:
+    seller_id = await _selected_seller_id(state, message)
+    if seller_id is None:
+        return
+    try:
+        async with get_session() as session:
+            categories = await ProductService.list_seller_categories(session, seller_id)
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+    if not categories:
+        await message.answer("Bu do'konda hali kategoriyalar yo'q.")
+        return
+    await message.answer("Kategoriyani tanlang:", reply_markup=_categories_keyboard(seller_id, categories))
 
 
 @router.callback_query(F.data.startswith("user_shop:"))
@@ -393,7 +466,12 @@ async def user_favs(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("user_new:"))
 async def user_new_arrivals(callback: CallbackQuery, bot: Bot) -> None:
-    _, seller_id_text, _, page_text = callback.data.split(":", maxsplit=3)
+    parts = callback.data.split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Noto'g'ri filter", show_alert=True)
+        return
+    _, seller_id_text, *rest = parts
+    page_text = rest[-1]
     if not seller_id_text.isdigit() or not page_text.isdigit():
         await callback.answer("Noto'g'ri filter", show_alert=True)
         return
@@ -424,6 +502,7 @@ async def user_new_arrivals(callback: CallbackQuery, bot: Bot) -> None:
                 continue
             except Exception:
                 pass
+        await callback.message.answer(f"Mahsulot ID: {product.id}")
 
     pages = max(ceil(total / 5), 1)
     await callback.message.answer(
@@ -460,6 +539,34 @@ async def show_big_market(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer()
 
 
+@router.message(F.text == "⚖️Katta bozor")
+async def show_big_market_text(message: Message, bot: Bot) -> None:
+    try:
+        async with get_session() as session:
+            admin_user_row = await session.execute(select(User).where(User.role == "super_admin").limit(1))
+            admin_user = admin_user_row.scalar_one_or_none()
+            if not admin_user or not admin_user.seller_id:
+                await message.answer("⚖️Katta bozor hali bo'sh.")
+                return
+            products = await ProductService.list_products_by_seller(session, admin_user.seller_id)
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+
+    if not products:
+        await message.answer("⚖️Katta bozor hali bo'sh.")
+        return
+
+    for product in products[:10]:
+        if product.channel_id and product.message_id:
+            try:
+                await bot.copy_message(message.chat.id, product.channel_id, int(product.message_id))
+                continue
+            except Exception:
+                pass
+        await message.answer(f"Mahsulot ID: {product.id}")
+
+
 @router.callback_query(F.data == "tezgo:1")
 async def show_tezgo(callback: CallbackQuery, bot: Bot) -> None:
     try:
@@ -486,6 +593,30 @@ async def show_tezgo(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer()
 
 
+@router.message(F.text == "⚡️TezGo")
+async def show_tezgo_text(message: Message, bot: Bot) -> None:
+    try:
+        async with get_session() as session:
+            admin_user_row = await session.execute(select(User).where(User.role == "super_admin").limit(1))
+            admin_user = admin_user_row.scalar_one_or_none()
+            if not admin_user or not admin_user.seller_id:
+                await message.answer("⚡️TezGo hozircha sozlanmagan.")
+                return
+            content = await SellerContentService.get_content(session, admin_user.seller_id, "tezgo")
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+
+    if not content:
+        await message.answer("⚡️TezGo hozircha sozlanmagan.")
+        return
+
+    try:
+        await bot.copy_message(message.chat.id, content.channel_id, int(content.message_id))
+    except Exception:
+        await message.answer("⚡️TezGo kontenti topilmadi.")
+
+
 @router.callback_query(F.data.startswith("user_promo:"))
 async def user_promo(callback: CallbackQuery, bot: Bot) -> None:
     seller_id = int(callback.data.split(":", maxsplit=1)[1])
@@ -496,6 +627,83 @@ async def user_promo(callback: CallbackQuery, bot: Bot) -> None:
 async def user_contact(callback: CallbackQuery, bot: Bot) -> None:
     seller_id = int(callback.data.split(":", maxsplit=1)[1])
     await _show_seller_content(callback, bot, seller_id, "contact", "📞 Aloqa")
+
+
+@router.message(F.text == "💰 Aksiya")
+async def user_promo_text(message: Message, state: FSMContext, bot: Bot) -> None:
+    seller_id = await _selected_seller_id(state, message)
+    if seller_id is None:
+        return
+    await _show_seller_content_text(message, bot, seller_id, "promo", "💰 Aksiya")
+
+
+@router.message(F.text == "📞 Aloqa")
+async def user_contact_text(message: Message, state: FSMContext, bot: Bot) -> None:
+    seller_id = await _selected_seller_id(state, message)
+    if seller_id is None:
+        return
+    await _show_seller_content_text(message, bot, seller_id, "contact", "📞 Aloqa")
+
+
+@router.message(F.text == "❤️ Sevimlilar")
+async def user_favs_text(message: Message, state: FSMContext, bot: Bot) -> None:
+    seller_id = await _selected_seller_id(state, message)
+    if seller_id is None:
+        return
+    try:
+        async with get_session() as session:
+            user = await UserService.get_or_create(session, message.from_user.id, admin_id=_admin_id())
+            products = await FavoriteService.list_by_seller(session, user_id=user.id, seller_id=seller_id)
+            await session.commit()
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+
+    if not products:
+        await message.answer("Sevimlilar bo'sh.")
+        return
+
+    for product in products:
+        if product.channel_id and product.message_id:
+            try:
+                await bot.copy_message(message.chat.id, product.channel_id, int(product.message_id))
+                continue
+            except Exception:
+                pass
+        await message.answer(f"Mahsulot ID: {product.id}")
+
+
+@router.message(F.text == "🔥 Yangi kelganlar")
+async def user_new_arrivals_text(message: Message, state: FSMContext, bot: Bot) -> None:
+    seller_id = await _selected_seller_id(state, message)
+    if seller_id is None:
+        return
+    page = 1
+    try:
+        async with get_session() as session:
+            products, total = await ProductService.list_new_arrivals(session, seller_id, page=page)
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+
+    if total == 0:
+        await message.answer("Yangi kelgan tovarlar yo'q.")
+        return
+
+    for product in products:
+        if product.channel_id and product.message_id:
+            try:
+                await bot.copy_message(message.chat.id, product.channel_id, int(product.message_id))
+                continue
+            except Exception:
+                pass
+        await message.answer(f"Mahsulot ID: {product.id}")
+
+    pages = max(ceil(total / 5), 1)
+    await message.answer(
+        f"🔥 Yangi kelganlar | Jami: {total}",
+        reply_markup=_pagination_keyboard("user_new", seller_id, "x", page, pages),
+    )
 
 
 async def _show_seller_content(
@@ -532,3 +740,31 @@ async def _show_seller_content(
     except Exception:
         pass
     await callback.answer()
+
+
+async def _show_seller_content_text(
+    message: Message,
+    bot: Bot,
+    seller_id: int,
+    content_type: str,
+    title: str,
+) -> None:
+    try:
+        async with get_session() as session:
+            content = await SellerContentService.get_content(session, seller_id=seller_id, content_type=content_type)
+    except (SQLAlchemyError, RuntimeError):
+        await message.answer("Xatolik")
+        return
+
+    if not content or not content.message_id:
+        await message.answer(f"{title} uchun ma'lumot yo'q.")
+        return
+
+    try:
+        await bot.copy_message(
+            chat_id=message.chat.id,
+            from_chat_id=content.channel_id,
+            message_id=int(content.message_id),
+        )
+    except Exception:
+        await message.answer(f"{title} uchun kontent topilmadi.")

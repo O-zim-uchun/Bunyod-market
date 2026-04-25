@@ -6,6 +6,7 @@ Quyidagini Railway → Service → **Variables** bo'limiga nusxalab qo'ying.
 
 ```env
 BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+CLIENT_BOT_TOKEN=YOUR_CLIENT_BOT_TOKEN
 ADMIN_ID=123456789
 DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 ```
@@ -14,6 +15,7 @@ DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 
 ```env
 BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+CLIENT_BOT_TOKEN=YOUR_CLIENT_BOT_TOKEN
 ADMIN_ID=123456789
 DATABASE_PUBLIC_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 POSTGRES_URL=postgresql+asyncpg://user:pass@host:5432/dbname
