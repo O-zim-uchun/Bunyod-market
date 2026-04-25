@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from os import getenv
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Base
@@ -17,12 +18,45 @@ if DATABASE_URL:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 
+async def _ensure_runtime_columns() -> None:
+    """Lightweight compatibility DDL for old DBs where migrations were not executed."""
+    if _engine is None:
+        return
+
+    statements = [
+        # users
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS seller_id BIGINT NULL",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS telegram_id BIGINT NULL",
+        # products
+        "ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS seller_id BIGINT NULL",
+        "ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS channel_id BIGINT NULL",
+        "ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS message_id BIGINT NULL",
+        "ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS category VARCHAR(64) NULL",
+        "ALTER TABLE IF EXISTS products ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        # sellers
+        "CREATE TABLE IF NOT EXISTS sellers (id BIGSERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, telegram_id BIGINT NOT NULL UNIQUE, channel_id BIGINT NULL, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    ]
+
+    async with _engine.begin() as conn:
+        for stmt in statements:
+            await conn.execute(text(stmt))
+
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_telegram_id ON users (telegram_id) WHERE telegram_id IS NOT NULL"
+            )
+        )
+
+
 async def init_models() -> None:
     if _engine is None:
         raise RuntimeError("DATABASE_URL (yoki POSTGRES_URL) Railway Variables'da o'rnatilmagan")
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    await _ensure_runtime_columns()
 
 
 @asynccontextmanager
