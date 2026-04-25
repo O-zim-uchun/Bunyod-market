@@ -3,6 +3,7 @@ import logging
 from os import getenv
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramConflictError
 
 from app.db.session import init_models
 from app.routers.admin import router as admin_router
@@ -31,9 +32,18 @@ async def main() -> None:
     dp.include_router(seller_router)
     dp.include_router(user_router)
 
+    # Polling only: disable webhook explicitly
+    await bot.delete_webhook(drop_pending_updates=False)
+
     while True:
         try:
             await dp.start_polling(bot)
+        except TelegramConflictError:
+            logging.warning(
+                "TelegramConflictError: boshqa getUpdates jarayoni ishlayapti. "
+                "Faqat bitta bot instance qoldiring. 15 soniyadan keyin qayta urinish."
+            )
+            await asyncio.sleep(15)
         except Exception:
             logging.exception("Polling xatoligi, 5 soniyadan keyin qayta ishga tushadi")
             await asyncio.sleep(5)
