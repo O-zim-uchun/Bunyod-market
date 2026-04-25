@@ -28,9 +28,9 @@ async def main() -> None:
     bot = Bot(token=get_bot_token())
     dp = Dispatcher()
 
-    dp.include_router(admin_router)
-    dp.include_router(seller_router)
     dp.include_router(user_router)
+    dp.include_router(seller_router)
+    dp.include_router(admin_router)
 
     # Polling only: disable webhook explicitly
     await bot.delete_webhook(drop_pending_updates=False)

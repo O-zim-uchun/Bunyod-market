@@ -3,6 +3,7 @@ from math import ceil
 from os import getenv
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -29,6 +30,51 @@ def _admin_id() -> int | None:
     if value and value.isdigit():
         return int(value)
     return None
+
+
+def _is_public_user_entry_event(event: Message | CallbackQuery) -> bool:
+    if isinstance(event, Message):
+        text = (event.text or "").strip()
+        return text.startswith("/start") or text.startswith("/satr")
+    return False
+
+
+class UserRoleMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if _is_public_user_entry_event(event):
+            return await handler(event, data)
+
+        telegram_user = getattr(event, "from_user", None)
+        if telegram_user is None:
+            return await handler(event, data)
+
+        try:
+            async with get_session() as session:
+                user = await UserService.get_or_create(session, telegram_user.id, admin_id=_admin_id())
+                await session.commit()
+        except Exception:
+            if isinstance(event, CallbackQuery):
+                await event.answer("Role tekshirishda xatolik.", show_alert=True)
+                return None
+            if isinstance(event, Message):
+                await event.answer("Role tekshirishda xatolik.")
+                return None
+            return None
+
+        if user.role != "user":
+            if isinstance(event, CallbackQuery):
+                await event.answer("Bu bo'lim faqat mijozlar uchun.", show_alert=True)
+                return None
+            if isinstance(event, Message):
+                await event.answer("Bu bo'lim faqat mijozlar uchun. /start bosing.")
+                return None
+            return None
+
+        return await handler(event, data)
+
+
+router.message.middleware(UserRoleMiddleware())
+router.callback_query.middleware(UserRoleMiddleware())
 
 
 def _remove_clicked_button(markup: InlineKeyboardMarkup | None, clicked_data: str) -> InlineKeyboardMarkup | None:
@@ -122,6 +168,7 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     ids = [s.id for s in sellers]
     random.shuffle(ids)
     await state.update_data(seller_order=ids)
+    await message.answer("🛍 Mijoz paneli")
     await _show_sellers_page(message, state, page=1)
 
 
